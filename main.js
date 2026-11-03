@@ -328,30 +328,27 @@ const audioSelectors = {
   speakerHeadset: selectOne("#outH")
 };
 
-const TEST_TONE_FREQUENCY = 220;
+const TEST_TONE_FREQUENCY = 880;
+const TEST_TONE_GAIN = 0.98;
 const STEREO_PAN = { Left: -1, Right: 1 };
 const AUDIO_ITEMS = [
   { name: "Laptop speaker · left", type: "speaker", device: "laptop", channel: "Left" },
   { name: "Laptop speaker · right", type: "speaker", device: "laptop", channel: "Right" },
   { name: "Laptop microphone", type: "mic", device: "laptop" },
-  { name: "Headset speaker · left", type: "speaker", device: "headset", channel: "Left" },
-  { name: "Headset speaker · right", type: "speaker", device: "headset", channel: "Right" },
   { name: "Headset microphone", type: "mic", device: "headset" }
 ].map((item) => ({ ...item, status: null }));
 
 function renderAudioResultsTable() {
   selectOne("#res").innerHTML = AUDIO_ITEMS.map((item) => {
     const status = item.status;
-    const isHeadsetSpeakerPending = status === false && item.type === "speaker" && item.device === "headset";
-
     let cssClass = "n";
     if (status === true) cssClass = "y";
-    else if (status !== false || isHeadsetSpeakerPending) cssClass = "w";
+    else if (status !== false) cssClass = "w";
 
     let iconText = "—";
     if (status === true) iconText = "✓";
     else if (status === "running") iconText = "…";
-    else if (status === false) iconText = isHeadsetSpeakerPending ? "?" : "X";
+    else if (status === false) iconText = "X";
 
     return `<tr><td>${item.name}</td><td class="${cssClass}">${iconText}</td></tr>`;
   }).join("");
@@ -407,10 +404,11 @@ async function playFrequencyTone(freq, panValue, sinkId) {
   const gain = toneCtx.createGain();
   const panner = toneCtx.createStereoPanner();
 
+  osc.type = "sine";
   osc.frequency.value = freq;
   panner.pan.value = panValue;
   gain.gain.setValueAtTime(0, toneCtx.currentTime);
-  gain.gain.linearRampToValueAtTime(0.4, toneCtx.currentTime + 0.01);
+  gain.gain.linearRampToValueAtTime(TEST_TONE_GAIN, toneCtx.currentTime + 0.01);
 
   osc.connect(gain).connect(panner).connect(toneCtx.destination);
   osc.start();
@@ -419,7 +417,7 @@ async function playFrequencyTone(freq, panValue, sinkId) {
   return () => {
     const curTime = toneCtx.currentTime;
     gain.gain.cancelScheduledValues(curTime);
-    gain.gain.setValueAtTime(0.4, curTime);
+    gain.gain.setValueAtTime(TEST_TONE_GAIN, curTime);
     gain.gain.linearRampToValueAtTime(0, curTime + 0.01);
     osc.stop(curTime + 0.02);
     setTimeout(() => toneCtx.close(), 150);
@@ -464,7 +462,7 @@ async function playHeadsetJingle(panValue, sinkId) {
   jingleCtx.close();
 }
 
-function calculateSignalToNoiseScore(analyser, targetFreq) {
+function calculateFrequencyLevels(analyser, targetFreq) {
   const binCount = analyser.frequencyBinCount;
   const frequencyData = new Float32Array(binCount);
   analyser.getFloatFrequencyData(frequencyData);
@@ -474,18 +472,21 @@ function calculateSignalToNoiseScore(analyser, targetFreq) {
   let noiseSum = 0;
   let noiseSampleCount = 0;
 
-  for (let bin = targetBin - 2; bin <= targetBin + 2; bin++) {
+  for (let bin = Math.max(0, targetBin - 2); bin <= Math.min(binCount - 1, targetBin + 2); bin++) {
     peakSignal = Math.max(peakSignal, frequencyData[bin]);
   }
 
-  for (let bin = Math.max(1, targetBin - 60); bin <= targetBin + 60; bin++) {
+  for (let bin = Math.max(1, targetBin - 60); bin <= Math.min(binCount - 1, targetBin + 60); bin++) {
     if (Math.abs(bin - targetBin) > 8) {
       noiseSum += frequencyData[bin];
       noiseSampleCount++;
     }
   }
 
-  return peakSignal - noiseSum / noiseSampleCount;
+  return {
+    targetLevel: peakSignal,
+    prominence: peakSignal - noiseSum / noiseSampleCount
+  };
 }
 
 audioSelectors.micLaptop.onchange = audioSelectors.micHeadset.onchange = stopMicrophones;
@@ -537,15 +538,16 @@ selectOne("#btnDev").onclick = async () => {
 
 const sleep = (durationMs) => new Promise((resolve) => setTimeout(resolve, durationMs));
 
-async function sampleMicrophonesForTone(frequency) {
-  const peakReadings = { laptop: -99, headset: -99 };
-  for (let elapsed = 0; elapsed < 1400; elapsed += 60) {
+async function sampleMicrophoneLevels(frequency, durationMs) {
+  const peakReadings = {
+    laptop: [],
+    headset: []
+  };
+  for (let elapsed = 0; elapsed < durationMs; elapsed += 60) {
     await sleep(60);
-    if (elapsed < 400) continue; // Allow tone to establish
     for (const micType of ["laptop", "headset"]) {
-      peakReadings[micType] = Math.max(
-        peakReadings[micType],
-        calculateSignalToNoiseScore(activeMicStreams[micType].analyser, frequency)
+      peakReadings[micType].push(
+        calculateFrequencyLevels(activeMicStreams[micType].analyser, frequency)
       );
     }
   }
@@ -553,6 +555,9 @@ async function sampleMicrophonesForTone(frequency) {
 }
 
 const DETECTION_THRESHOLD = 12;
+const BACKGROUND_SAMPLE_MS = 480;
+const TONE_SAMPLE_MS = 900;
+const TONE_SETTLE_MS = 240;
 
 selectOne("#btnRun").onclick = async () => {
   selectOne("#btnRun").disabled = true;
@@ -581,21 +586,31 @@ selectOne("#btnRun").onclick = async () => {
     item.status = "running";
     renderAudioResultsTable();
 
-    const outputDeviceId = (
-      item.device === "laptop" ? audioSelectors.speakerLaptop : audioSelectors.speakerHeadset
-    ).value;
-    const stopTone = await playFrequencyTone(TEST_TONE_FREQUENCY, STEREO_PAN[item.channel], outputDeviceId);
-
-    const levels = await sampleMicrophonesForTone(TEST_TONE_FREQUENCY);
+    const backgroundLevels = await sampleMicrophoneLevels(TEST_TONE_FREQUENCY, BACKGROUND_SAMPLE_MS);
+    const stopTone = await playFrequencyTone(
+      TEST_TONE_FREQUENCY,
+      STEREO_PAN[item.channel],
+      audioSelectors.speakerLaptop.value
+    );
+    await sleep(TONE_SETTLE_MS);
+    const toneLevels = await sampleMicrophoneLevels(TEST_TONE_FREQUENCY, TONE_SAMPLE_MS);
     stopTone();
 
-    const laptopHeardTone = levels.laptop >= DETECTION_THRESHOLD;
-    const headsetHeardTone = levels.headset >= DETECTION_THRESHOLD;
+    const heardTone = (micType) => {
+      const backgroundPeak = Math.max(...backgroundLevels[micType].map((levels) => levels.targetLevel));
+      return toneLevels[micType].some(
+        (levels) =>
+          levels.targetLevel - backgroundPeak >= DETECTION_THRESHOLD &&
+          levels.prominence >= DETECTION_THRESHOLD
+      );
+    };
+    const laptopHeardTone = heardTone("laptop");
+    const headsetHeardTone = heardTone("headset");
 
     if (laptopHeardTone) confirmedMicDetections.laptop++;
-    if (headsetHeardTone && item.device === "laptop") confirmedMicDetections.headset++;
+    if (headsetHeardTone) confirmedMicDetections.headset++;
 
-    item.status = item.device === "laptop" ? laptopHeardTone || headsetHeardTone : laptopHeardTone;
+    item.status = laptopHeardTone || headsetHeardTone;
     renderAudioResultsTable();
     await sleep(300);
   }
@@ -610,18 +625,13 @@ selectOne("#btnRun").onclick = async () => {
   selectOne("#btnRun").disabled = false;
   selectOne("#auSkip").hidden = false;
 
-  const allPassedOrHeadsetSpeakerFailed = AUDIO_ITEMS.every(
-    (item) => item.status === true || (item.type === "speaker" && item.device === "headset")
-  );
-  const anyFailedToConfirm = AUDIO_ITEMS.some((item) => item.status !== true);
+  const allPassed = AUDIO_ITEMS.every((item) => item.status === true);
 
-  selectOne("#auNote").textContent = allPassedOrHeadsetSpeakerFailed
-    ? anyFailedToConfirm
-      ? "The headset speakers couldn’t be confirmed automatically. You can check them with the jingle button."
-      : ""
-    : "Some items weren’t confirmed. You can run the test again or continue.";
+  selectOne("#auNote").textContent = allPassed
+    ? ""
+    : "Some items weren’t confirmed against the measured background. You can run the test again or continue. Headset speakers are checked with the jingle button.";
 
-  if (allPassedOrHeadsetSpeakerFailed) {
+  if (allPassed) {
     completeSection("au", true, "cam");
   }
 };
