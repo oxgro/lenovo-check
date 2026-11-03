@@ -12,14 +12,11 @@ key on the visualization.
 
 ## Speakers/Microphone
 The automatic test plays a tone on the left then right laptop speaker and
-listens for it on both the laptop and headset microphones. It also attempts
-to test your headset speaker by playing in the left then right ear and
-listening on the laptop microphone, but if that fails, the user is prompted
-to manually test the headset by playing a short jingle.
-
-> ℹ️ This will likely be changed in the future to not attempt automatic
-> testing for the headset speakers, as they need to be tested multiple times,
-> one for each port
+listens for it on both the laptop and headset microphones. The website will
+not try to test your headphone speakers, as they are not loud enough to
+reliably hear on the laptop's microphone. Instead, the user is encouraged
+to test the headset speakers in each USB port by playing a short jingle in
+each ear.
 
 ## Camera
 Simply shows you your camera and gives an option to either confirm that it
