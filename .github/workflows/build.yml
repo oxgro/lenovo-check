@@ -1,0 +1,64 @@
+name: Build and Deploy to Prod Branch
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# Prevent concurrent runs on the same branch
+concurrency:
+  group: "prod-deploy"
+  cancel-in-progress: true # this was set to false on the first draft from Gemini and I find that funny
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Minification Tools
+        run: |
+          npm install -g html-minifier-terser clean-css-cli terser
+
+      - name: Build & Minify Files
+        run: |
+          mkdir -p dist
+
+          # Minify JavaScript
+          terser main.js --compress --mangle -o dist/main.js
+
+          # Minify CSS
+          cleancss -o dist/style.css style.css
+
+          # Minify HTML (collapsing whitespace, stripping comments)
+          html-minifier-terser \
+            --collapse-whitespace \
+            --remove-comments \
+            --remove-redundant-attributes \
+            --remove-script-type-attributes \
+            --remove-style-link-type-attributes \
+            --use-short-doctype \
+            -o dist/index.html index.html
+
+      - name: Push to prod branch
+        run: |
+          cd dist
+          git init
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b prod
+          git add -A
+          git commit -m "Deploy minified build from commit ${{ github.sha }}"
+          git push --force "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" prod
