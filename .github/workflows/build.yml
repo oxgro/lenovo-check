@@ -1,4 +1,4 @@
-name: Build and Deploy to Prod Branch
+name: Build and Minify
 
 on:
   push:
