@@ -11,19 +11,19 @@
 </head>
 <body>
   <nav aria-label="Progress">
-    <span class="chip" data-s="kb"><i></i>Keyboard</span>
-    <span class="chip" data-s="au"><i></i>Speakers &amp; mics</span>
-    <span class="chip" data-s="cam"><i></i>Camera</span>
-    <span class="chip" data-s="fin"><i></i>Drivers</span>
+    <a class="chip" data-s="keyboard" href="#keyboard"><i></i>Keyboard</a>
+    <a class="chip" data-s="audio" href="#audio"><i></i>Speakers &amp; mics</a>
+    <a class="chip" data-s="camera" href="#camera"><i></i>Camera</a>
+    <a class="chip" data-s="drivers" href="#drivers"><i></i>Drivers</a>
   </nav>
 
-  <section id="kb">
-    <h1>Press every key.</h1>
+  <section id="keyboard">
+    <h1>Keyboard</h1>
     <p class="lead">
-      Each key turns light once the browser sees it. Function keys count whether they arrive as F1–F12 or as their media codes (volume, mic mute, brightness). Fn, Windows and PrtSc are skipped. Keys the browser never receives can be marked by double-clicking them.
+      Each key turns light once the browser sees it. Function keys count whether they arrive as F1-F12 or as their media codes (volume, mic mute, brightness). Fn, Windows and PrtSc are skipped. Keys the browser never receives can be marked by double-clicking them.
     </p>
     <div class="stage" id="board" tabindex="0" aria-label="Keyboard test area">
-      <div id="keys"></div>
+      <div id="keyboard-keys"></div>
     </div>
     <div class="status">
       <span id="count">0 keys tested</span>
@@ -32,7 +32,7 @@
     </div>
   </section>
 
-  <section id="au">
+  <section id="audio">
     <h2>Speakers and microphones</h2>
     <p class="lead">
       Select the laptop speakers and microphones, then run the automatic test. It plays an 880 Hz tone through each laptop speaker and checks for a clear spike above measured background noise. Check headset speakers manually with the left/right jingle.
@@ -79,11 +79,11 @@
     </div>
   </section>
 
-  <section id="cam">
+  <section id="camera">
     <h2>Camera</h2>
     <p class="lead">This is what your laptop camera sees.</p>
     <div class="stage">
-      <video id="vid" autoplay playsinline muted></video>
+      <video id="camera-video" autoplay playsinline muted></video>
       <p class="note" id="camNote"></p>
       <div class="btns" style="margin-top: 14px;">
         <button class="pri" id="camOk">Looks good</button>
@@ -92,7 +92,7 @@
     </div>
   </section>
 
-  <section id="fin">
+  <section id="drivers">
     <h2>Drivers</h2>
     <p class="lead">Install Lenovo Service Bridge first, then use Lenovo Support to find the drivers for this machine.</p>
     <div class="links">

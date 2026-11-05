@@ -12,18 +12,48 @@ const testState = {
 };
 
 const SECTION_TITLES = {
-  kb: "Keyboard",
-  au: "Speakers and mics",
-  cam: "Camera"
+  keyboard: "Keyboard",
+  audio: "Speakers and mics",
+  camera: "Camera"
 };
 
 // --- Navigation & State Management ---
+const LEGACY_SECTION_HASHES = {
+  kb: "keyboard",
+  keys: "keyboard",
+  speakers: "audio",
+  speaker: "audio",
+  microphone: "audio",
+  microphones: "audio",
+  mic: "audio",
+  headset: "audio",
+  video: "camera",
+  vid: "camera",
+  cam: "camera",
+  driver: "drivers",
+  lenovo: "drivers",
+  update: "drivers",
+  updates: "drivers"
+};
+
 function scrollToSection(sectionId) {
   selectOne("#" + sectionId).scrollIntoView({
     behavior: prefersReducedMotion ? "auto" : "smooth",
     block: "start"
   });
 }
+
+function redirectLegacySectionHash() {
+  const legacyHash = location.hash.slice(1).toLowerCase();
+  const sectionId = LEGACY_SECTION_HASHES[legacyHash];
+  if (!sectionId) return;
+
+  history.replaceState(null, "", `#${sectionId}`);
+  scrollToSection(sectionId);
+}
+
+addEventListener("hashchange", redirectLegacySectionHash);
+redirectLegacySectionHash();
 
 function completeSection(sectionKey, passed, nextSectionId, forceUpdate = false) {
   // Prevent overriding unless forced or passing a previously failed step
@@ -37,10 +67,7 @@ function completeSection(sectionKey, passed, nextSectionId, forceUpdate = false)
   chipElement.classList.add(passed ? "ok" : "bad");
 
   setTimeout(() => scrollToSection(nextSectionId), 700);
-
-  if (nextSectionId === "fin") {
-    renderSummary();
-  }
+  renderSummary();
   updateGlobalStatusBar();
 }
 
@@ -184,7 +211,7 @@ const codeToKeyMap = {};
 const keyElementsMap = {};
 let totalTrackableKeys = 0;
 const testedKeysSet = new Set();
-const keyboardContainer = selectOne("#keys");
+const keyboardContainer = selectOne("#keyboard-keys");
 
 function buildKeyNode(keyDef) {
   const keyEl = document.createElement("div");
@@ -212,7 +239,7 @@ function markKeyAsTested(keyCode) {
   selectOne("#count").textContent = `${testedKeysSet.size} of ${totalTrackableKeys} keys tested`;
 
   if (testedKeysSet.size === totalTrackableKeys) {
-    completeSection("kb", true, "au");
+    completeSection("keyboard", true, "audio");
   }
 }
 
@@ -265,7 +292,7 @@ new IntersectionObserver(
     isKeyboardInView = entry.isIntersecting;
   },
   { threshold: 0.3 }
-).observe(selectOne("#kb"));
+).observe(selectOne("#keyboard"));
 
 addEventListener(
   "keydown",
@@ -315,7 +342,7 @@ addEventListener("load", () => {
   }, 20000);
 });
 
-selectOne("#kbSkip").onclick = () => continueToNext("kb", "au");
+selectOne("#kbSkip").onclick = () => continueToNext("keyboard", "audio");
 
 // --- Audio Testing Logic ---
 let audioContext;
@@ -372,7 +399,7 @@ async function attachMicrophone(deviceId) {
   });
 
   const analyser = audioContext.createAnalyser();
-  analyser.fftSize = 8192;
+  analyser.fftSize = 2 ** 13;
   analyser.smoothingTimeConstant = 0;
   audioContext.createMediaStreamSource(stream).connect(analyser);
 
@@ -559,18 +586,65 @@ const BACKGROUND_SAMPLE_MS = 480;
 const TONE_SAMPLE_MS = 900;
 const TONE_SETTLE_MS = 240;
 
-selectOne("#btnRun").onclick = async () => {
-  selectOne("#btnRun").disabled = true;
+function detectedTone(toneSamples, backgroundSamples) {
+  const backgroundPeak = Math.max(...backgroundSamples.map(({ targetLevel }) => targetLevel));
+  return toneSamples.some(
+    ({ targetLevel, prominence }) =>
+      targetLevel - backgroundPeak >= DETECTION_THRESHOLD &&
+      prominence >= DETECTION_THRESHOLD
+  );
+}
+
+async function testSpeaker(item) {
+  item.status = "running";
+  renderAudioResultsTable();
+
+  const backgroundLevels = await sampleMicrophoneLevels(TEST_TONE_FREQUENCY, BACKGROUND_SAMPLE_MS);
+  const stopTone = await playFrequencyTone(
+    TEST_TONE_FREQUENCY,
+    STEREO_PAN[item.channel],
+    audioSelectors.speakerLaptop.value
+  );
+
+  let toneLevels;
+  try {
+    await sleep(TONE_SETTLE_MS);
+    toneLevels = await sampleMicrophoneLevels(TEST_TONE_FREQUENCY, TONE_SAMPLE_MS);
+  } finally {
+    stopTone();
+  }
+
+  const heardBy = {
+    laptop: detectedTone(toneLevels.laptop, backgroundLevels.laptop),
+    headset: detectedTone(toneLevels.headset, backgroundLevels.headset)
+  };
+  item.status = heardBy.laptop || heardBy.headset;
+  renderAudioResultsTable();
+  await sleep(300);
+
+  return heardBy;
+}
+
+function updateMicrophoneResults(confirmedDetections) {
+  AUDIO_ITEMS.filter((item) => item.type === "mic").forEach((item) => {
+    item.status = confirmedDetections[item.device] > 0;
+  });
+}
+
+async function runAudioTest() {
+  const runButton = selectOne("#btnRun");
+  const noteElement = selectOne("#auNote");
+  runButton.disabled = true;
 
   try {
     await initializeMicrophones();
   } catch (err) {
-    selectOne("#auNote").textContent = "Couldn’t open microphones: " + err.message;
-    selectOne("#btnRun").disabled = false;
+    noteElement.textContent = "Couldn’t open microphones: " + err.message;
+    runButton.disabled = false;
     return;
   }
 
-  selectOne("#auNote").textContent =
+  noteElement.textContent =
     audioSelectors.micLaptop.value === audioSelectors.micHeadset.value
       ? "Both microphones are the same device. Pick different ones for a meaningful result."
       : "";
@@ -578,63 +652,29 @@ selectOne("#btnRun").onclick = async () => {
   AUDIO_ITEMS.forEach((item) => (item.status = null));
   renderAudioResultsTable();
 
-  const confirmedMicDetections = { laptop: 0, headset: 0 };
-
-  for (const item of AUDIO_ITEMS) {
-    if (item.type !== "speaker") continue;
-
-    item.status = "running";
-    renderAudioResultsTable();
-
-    const backgroundLevels = await sampleMicrophoneLevels(TEST_TONE_FREQUENCY, BACKGROUND_SAMPLE_MS);
-    const stopTone = await playFrequencyTone(
-      TEST_TONE_FREQUENCY,
-      STEREO_PAN[item.channel],
-      audioSelectors.speakerLaptop.value
-    );
-    await sleep(TONE_SETTLE_MS);
-    const toneLevels = await sampleMicrophoneLevels(TEST_TONE_FREQUENCY, TONE_SAMPLE_MS);
-    stopTone();
-
-    const heardTone = (micType) => {
-      const backgroundPeak = Math.max(...backgroundLevels[micType].map((levels) => levels.targetLevel));
-      return toneLevels[micType].some(
-        (levels) =>
-          levels.targetLevel - backgroundPeak >= DETECTION_THRESHOLD &&
-          levels.prominence >= DETECTION_THRESHOLD
-      );
-    };
-    const laptopHeardTone = heardTone("laptop");
-    const headsetHeardTone = heardTone("headset");
-
-    if (laptopHeardTone) confirmedMicDetections.laptop++;
-    if (headsetHeardTone) confirmedMicDetections.headset++;
-
-    item.status = laptopHeardTone || headsetHeardTone;
-    renderAudioResultsTable();
-    await sleep(300);
+  const confirmedDetections = { laptop: 0, headset: 0 };
+  for (const item of AUDIO_ITEMS.filter((audioItem) => audioItem.type === "speaker")) {
+    const heardBy = await testSpeaker(item);
+    if (heardBy.laptop) confirmedDetections.laptop++;
+    if (heardBy.headset) confirmedDetections.headset++;
   }
 
-  for (const item of AUDIO_ITEMS) {
-    if (item.type === "mic") {
-      item.status = confirmedMicDetections[item.device] > 0;
-    }
-  }
-
+  updateMicrophoneResults(confirmedDetections);
   renderAudioResultsTable();
-  selectOne("#btnRun").disabled = false;
+  runButton.disabled = false;
   selectOne("#auSkip").hidden = false;
 
   const allPassed = AUDIO_ITEMS.every((item) => item.status === true);
-
-  selectOne("#auNote").textContent = allPassed
+  noteElement.textContent = allPassed
     ? ""
     : "Some items weren’t confirmed against the measured background. You can run the test again or continue. Headset speakers are checked with the jingle button.";
 
   if (allPassed) {
-    completeSection("au", true, "cam");
+    completeSection("audio", true, "camera");
   }
-};
+}
+
+selectOne("#btnRun").onclick = runAudioTest;
 
 selectOne("#btnHs").onclick = async (evt) => {
   const triggerBtn = evt.currentTarget;
@@ -647,7 +687,7 @@ selectOne("#btnHs").onclick = async (evt) => {
   triggerBtn.disabled = false;
 };
 
-selectOne("#auSkip").onclick = () => continueToNext("au", "cam");
+selectOne("#auSkip").onclick = () => continueToNext("audio", "camera");
 
 setTimeout(() => {
   selectOne("#auSkip").hidden = false;
@@ -665,7 +705,7 @@ new IntersectionObserver(
       navigator.mediaDevices
         .getUserMedia({ video: true })
         .then((stream) => {
-          selectOne("#vid").srcObject = stream;
+          selectOne("#camera-video").srcObject = stream;
           selectOne("#camNote").textContent = "";
         })
         .catch((err) => {
@@ -674,10 +714,10 @@ new IntersectionObserver(
     }
   },
   { threshold: 0.5 }
-).observe(selectOne("#cam"));
+).observe(selectOne("#camera"));
 
-selectOne("#camOk").onclick = () => completeSection("cam", true, "fin", true);
-selectOne("#camBad").onclick = () => completeSection("cam", false, "fin", true);
+selectOne("#camOk").onclick = () => completeSection("camera", true, "drivers", true);
+selectOne("#camBad").onclick = () => completeSection("camera", false, "drivers", true);
 
 // --- Driver Links & Final Summary ---
 const linksClickedTracker = {};
@@ -691,7 +731,7 @@ for (const [elementId, linkKey] of driverLinks) {
     linksClickedTracker[linkKey] = true;
     if (linksClickedTracker.serviceBridgeDownloaded && linksClickedTracker.supportPageVisited) {
       testState.drivers = true;
-      selectOne('.chip[data-s="fin"]').classList.add("ok");
+      selectOne('.chip[data-s="drivers"]').classList.add("ok");
       updateGlobalStatusBar();
     }
   });

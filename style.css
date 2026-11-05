@@ -38,7 +38,8 @@
 }
 
 html {
-  scroll-padding-top: env(safe-area-inset-top, 0px);
+  scroll-behavior: smooth;
+  scroll-padding-top: calc(52px + env(safe-area-inset-top, 0px));
 }
 
 body {
@@ -79,6 +80,12 @@ body::before {
   font-size: 14px;
   white-space: nowrap;
   color: var(--mute);
+  text-decoration: none;
+}
+
+.chip:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
 }
 
 .chip i {
@@ -397,6 +404,10 @@ video {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
   * {
     animation-duration: 0.01ms !important;
     transition: none !important;
